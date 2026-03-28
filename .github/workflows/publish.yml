@@ -1,0 +1,57 @@
+name: Publish to NPM
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check and bump version if needed
+        id: version_check
+        run: node scripts/check-and-bump-version.js
+
+      - name: Commit version bump
+        if: steps.version_check.outputs.version_bumped == 'true'
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add package.json package-lock.json
+          git commit -m "chore: auto-bump version to ${{ steps.version_check.outputs.new_version }}"
+          git push
+
+      - name: Build package
+        run: npm run build
+
+      - name: Run linting
+        run: npm run lint
+
+      - name: Get package info
+        id: package
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          NAME=$(node -p "require('./package.json').name")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+          echo "📦 Publishing $NAME@$VERSION"
+
+      - name: Publish to NPM
+        run: npm publish --provenance --access public
