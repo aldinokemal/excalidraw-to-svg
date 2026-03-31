@@ -9,7 +9,7 @@ Useful if you are storing Excalidraw diagrams in repos and want a pipeline to ex
 
 - **CLI & API** — Use from the command line or as a library in your Node.js project.
 - **Embedded fonts** — Excalidraw's custom fonts (Excalifont, Virgil, Cascadia, Comic Shanns, Liberation Sans, Lilita One, Nunito) are automatically detected and embedded as base64 `@font-face` rules, so SVGs render correctly without external font dependencies.
-- **JSDOM-based** — Sets up a browser-like environment under the hood using JSDOM, so `@excalidraw/utils` works seamlessly in Node.js.
+- **Isolated runtime** — Uses JSDOM inside a worker thread so `@excalidraw/utils` can run in Node.js without mutating your app's global `window`, `document`, `fetch`, or other browser APIs.
 - **String or Object input** — Pass in a raw JSON string or a parsed JavaScript object.
 
 ## Installation
@@ -94,9 +94,10 @@ console.log(svgElement.outerHTML);
 
 ## How It Works
 
-1. **Browser environment simulation** — On module load, JSDOM is used to set up global browser APIs (`window`, `document`, `DOMParser`, `Canvas`, etc.) that `@excalidraw/utils` expects.
+1. **Isolated browser environment** — A worker thread creates a JSDOM-based browser-like environment (`window`, `document`, `DOMParser`, `Canvas`, etc.) that `@excalidraw/utils` expects, without modifying globals in the parent Node.js process.
 2. **SVG export** — The diagram is passed to `@excalidraw/utils`' `exportToSvg()` with `skipInliningFonts: true`.
-3. **Font embedding** — The generated SVG is scanned for `font-family` references. For each Excalidraw font found, the corresponding `.ttf` file is read from `@excalidraw/utils`' assets, base64-encoded, and injected as `@font-face` CSS rules into the SVG's `<style>` element.
+3. **Font embedding** — The generated SVG is scanned for `font-family` references. For each Excalidraw font found, the corresponding `.ttf` file is read from `@excalidraw/utils`' assets, subsetted to only the used glyphs when possible, base64-encoded, and injected as `@font-face` CSS rules into the SVG's `<style>` element.
+4. **SVG return value** — The worker serializes the SVG markup and the main thread returns it as a DOM `SVGElement`, preserving the same API for consumers.
 
 ## Development
 
@@ -112,24 +113,30 @@ npm test
 
 ### Publishing to npm
 
-1. Go to [npmjs.com → Access Tokens](https://www.npmjs.com/settings/aldinokemal2104/tokens) and generate a new **Automation** or **Publish** token.
-2. Bump the version in `package.json` (or use `npm version patch` / `npm version minor`).
-3. Run the publish command with your token:
+This package is configured to publish from GitHub Actions using npm Trusted Publisher with provenance.
+
+1. Bump the version in `package.json` (or use `npm version patch` / `npm version minor`).
+2. Push your changes to GitHub.
+3. Run the publish workflow from the Actions tab.
+
+If you need a manual fallback publish, you can still use an npm token:
 
 ```bash
 NPM_TOKEN=your_npm_token_here npm run npm:publish
 ```
 
-This will automatically run tests, authenticate with npm, publish the package with public access, and clean up the auth file afterward.
+The manual command automatically runs tests, authenticates with npm, publishes the package with public access, and cleans up the auth file afterward.
 
 ### Project Structure
 
 ```
 src/
-├── excalidraw-to-svg.js      # Core conversion logic + font embedding
+├── excalidraw-to-svg.js       # Public API, worker orchestration, SVG parsing
+├── excalidraw-runtime.js      # Isolated JSDOM + Excalidraw export runtime
+├── excalidraw-to-svg.worker.js # Worker thread entry point
 ├── build-svg-path.js          # Output path resolution for CLI
 ├── build-svg-path.test.js     # Tests for path resolution
-├── excalidraw-to-svg.test.js  # Tests for SVG conversion
+├── excalidraw-to-svg.test.js  # Tests for SVG conversion + global safety
 ├── cli.js                     # CLI entry point
 └── index.js                   # Package entry point (re-exports core)
 diagrams/                      # Example .excalidraw files
@@ -138,7 +145,8 @@ diagrams/                      # Example .excalidraw files
 ## Dependencies
 
 - [`@excalidraw/utils`](https://www.npmjs.com/package/@excalidraw/utils) — Excalidraw's official export utilities
-- [`jsdom`](https://www.npmjs.com/package/jsdom) — Browser environment simulation for Node.js
+- [`jsdom`](https://www.npmjs.com/package/jsdom) — Browser environment simulation used inside the isolated worker runtime
+- [`subset-font`](https://www.npmjs.com/package/subset-font) — Font subsetting to keep embedded SVG fonts small
 
 ## License
 
