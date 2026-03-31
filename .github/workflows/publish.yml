@@ -38,11 +38,8 @@ jobs:
           git commit -m "chore: auto-bump version to ${{ steps.version_check.outputs.new_version }}"
           git push
 
-      - name: Build package
-        run: npm run build
-
-      - name: Run linting
-        run: npm run lint
+      - name: Run tests
+        run: npm test -- --watchman=false
 
       - name: Get package info
         id: package
