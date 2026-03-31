@@ -71,6 +71,11 @@ const mockDiagramWithFont = {
 };
 
 describe("excalidraw-to-svg function", () => {
+  it("should not install browser globals on require", () => {
+    expect("window" in global).toBe(false);
+    expect("document" in global).toBe(false);
+  });
+
   it("should render an svg", async () => {
     const svg = await excalidrawToSvg(mockDiagram);
     expect(svg.outerHTML).toMatch(/<svg/);
@@ -86,5 +91,41 @@ describe("excalidraw-to-svg function", () => {
     // SVG should be under 100KB (without subsetting it would be ~2.2MB)
     const sizeKB = Buffer.byteLength(svgHTML, "utf8") / 1024;
     expect(sizeKB).toBeLessThan(100);
+  });
+
+  it("should keep host globals untouched during an in-flight conversion", async () => {
+    const nativeFetch = global.fetch;
+    const nativeConsoleError = console.error;
+
+    const pendingSvg = excalidrawToSvg(mockDiagram);
+
+    expect(global.fetch).toBe(nativeFetch);
+    expect(console.error).toBe(nativeConsoleError);
+    expect("window" in global).toBe(false);
+    expect("document" in global).toBe(false);
+
+    await pendingSvg;
+
+    expect(global.fetch).toBe(nativeFetch);
+    expect(console.error).toBe(nativeConsoleError);
+    expect("window" in global).toBe(false);
+    expect("document" in global).toBe(false);
+  });
+
+  it("should keep host globals untouched across concurrent conversions", async () => {
+    const nativeFetch = global.fetch;
+    const nativeConsoleError = console.error;
+
+    const [firstSvg, secondSvg] = await Promise.all([
+      excalidrawToSvg(mockDiagram),
+      excalidrawToSvg(mockDiagramWithFont),
+    ]);
+
+    expect(firstSvg.outerHTML).toMatch(/<svg/);
+    expect(secondSvg.outerHTML).toMatch(/<svg/);
+    expect(global.fetch).toBe(nativeFetch);
+    expect(console.error).toBe(nativeConsoleError);
+    expect("window" in global).toBe(false);
+    expect("document" in global).toBe(false);
   });
 });
