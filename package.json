@@ -11,6 +11,7 @@
     "url": "https://github.com/aldinokemal/excalidraw-to-svg/issues"
   },
   "main": "src/excalidraw-to-svg.js",
+  "types": "src/excalidraw-to-svg.d.ts",
   "bin": {
     "excalidraw-to-svg": "src/cli.js"
   },
