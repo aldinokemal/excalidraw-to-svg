@@ -129,3 +129,95 @@ describe("excalidraw-to-svg function", () => {
     expect("document" in global).toBe(false);
   });
 });
+
+describe("excalidraw-to-svg cancellation", () => {
+  afterEach(() => {
+    jest.clearAllMocks();
+    jest.resetModules();
+    jest.useRealTimers();
+    jest.unmock("worker_threads");
+  });
+
+  it("should reject with TimeoutError and terminate the worker on timeout", async () => {
+    jest.useFakeTimers();
+    jest.resetModules();
+
+    const workers = [];
+    jest.doMock("worker_threads", () => ({
+      Worker: jest.fn(() => {
+        const worker = {
+          once: jest.fn(),
+          removeAllListeners: jest.fn(),
+          terminate: jest.fn().mockResolvedValue(undefined),
+          postMessage: jest.fn(),
+        };
+        workers.push(worker);
+        return worker;
+      }),
+    }));
+
+    const excalidrawToSvgWithTimeout = require("./excalidraw-to-svg");
+    const promise = excalidrawToSvgWithTimeout(mockDiagram, { timeoutMs: 25 });
+    const rejection = expect(promise).rejects.toMatchObject({
+      name: "TimeoutError",
+      message: "SVG worker timed out after 25ms",
+    });
+
+    await jest.advanceTimersByTimeAsync(25);
+
+    await rejection;
+    expect(workers[0].terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it("should reject with AbortError and terminate the worker when aborted", async () => {
+    jest.resetModules();
+
+    const workers = [];
+    jest.doMock("worker_threads", () => ({
+      Worker: jest.fn(() => {
+        const worker = {
+          once: jest.fn(),
+          removeAllListeners: jest.fn(),
+          terminate: jest.fn().mockResolvedValue(undefined),
+          postMessage: jest.fn(),
+        };
+        workers.push(worker);
+        return worker;
+      }),
+    }));
+
+    const excalidrawToSvgWithAbort = require("./excalidraw-to-svg");
+    const controller = new AbortController();
+    const promise = excalidrawToSvgWithAbort(mockDiagram, { signal: controller.signal });
+    const rejection = expect(promise).rejects.toMatchObject({
+      name: "AbortError",
+      message: "SVG worker aborted",
+    });
+    controller.abort();
+
+    await rejection;
+    expect(workers[0].terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it("should reject immediately with AbortError when signal is already aborted", async () => {
+    jest.resetModules();
+
+    const mockWorkerModule = {
+      Worker: jest.fn(),
+    };
+    jest.doMock("worker_threads", () => mockWorkerModule);
+
+    const excalidrawToSvgPreAborted = require("./excalidraw-to-svg");
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      excalidrawToSvgPreAborted(mockDiagram, { signal: controller.signal })
+    ).rejects.toMatchObject({
+      name: "AbortError",
+      message: "SVG worker aborted",
+    });
+
+    expect(mockWorkerModule.Worker).not.toHaveBeenCalled();
+  });
+});
