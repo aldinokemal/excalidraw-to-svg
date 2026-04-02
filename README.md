@@ -10,6 +10,9 @@ Useful if you are storing Excalidraw diagrams in repos and want a pipeline to ex
 - **CLI & API** — Use from the command line or as a library in your Node.js project.
 - **Embedded fonts** — Excalidraw's custom fonts (Excalifont, Virgil, Cascadia, Comic Shanns, Liberation Sans, Lilita One, Nunito) are automatically detected and embedded as base64 `@font-face` rules, so SVGs render correctly without external font dependencies.
 - **Isolated runtime** — Uses JSDOM inside a worker thread so `@excalidraw/utils` can run in Node.js without mutating your app's global `window`, `document`, `fetch`, or other browser APIs.
+- **Warm worker architecture** — Reuses a single worker across back-to-back exports so Excalidraw, JSDOM, and font tooling stay hot instead of paying cold-start cost on every call.
+- **Font caching** — Caches font file reads and subset results inside the worker to speed up repeated exports with the same fonts and glyph sets.
+- **Timeout and abort support** — Supports `timeoutMs` and `AbortSignal`, and terminates the worker thread if an active export times out or is aborted.
 - **String or Object input** — Pass in a raw JSON string or a parsed JavaScript object.
 
 ## Installation
@@ -92,12 +95,59 @@ const svgElement = await excalidrawToSvg(json);
 console.log(svgElement.outerHTML);
 ```
 
+You can optionally enforce a timeout or cancel an in-flight export:
+
+```javascript
+const controller = new AbortController();
+
+const svgElement = await excalidrawToSvg(diagram, {
+  timeoutMs: 30_000,
+  signal: controller.signal,
+});
+```
+
 ## How It Works
 
-1. **Isolated browser environment** — A worker thread creates a JSDOM-based browser-like environment (`window`, `document`, `DOMParser`, `Canvas`, etc.) that `@excalidraw/utils` expects, without modifying globals in the parent Node.js process.
-2. **SVG export** — The diagram is passed to `@excalidraw/utils`' `exportToSvg()` with `skipInliningFonts: true`.
-3. **Font embedding** — The generated SVG is scanned for `font-family` references. For each Excalidraw font found, the corresponding `.ttf` file is read from `@excalidraw/utils`' assets, subsetted to only the used glyphs when possible, base64-encoded, and injected as `@font-face` CSS rules into the SVG's `<style>` element.
-4. **SVG return value** — The worker serializes the SVG markup and the main thread returns it as a DOM `SVGElement`, preserving the same API for consumers.
+### Architecture Summary
+
+1. **Public API call** — `excalidrawToSvg(diagram, options)` enqueues a request in the main thread.
+2. **Warm worker reuse** — A single worker is reused for sequential exports, so the Excalidraw runtime, JSDOM polyfills, and `subset-font` initialization stay hot between calls.
+3. **Queued execution** — Only one export runs at a time inside the worker. Additional calls wait in a queue until the active export finishes.
+4. **Runtime export** — Inside the worker, `@excalidraw/utils` renders the SVG with `skipInliningFonts: true`.
+5. **Font embedding with caches** — The worker scans used fonts, reads font files from disk once, caches subset results by `font + glyph set`, and injects `@font-face` rules into the SVG.
+6. **Main-thread parse** — The worker returns serialized SVG markup, and the main thread parses it back into a DOM `SVGElement`.
+7. **Idle cleanup** — If there is no more work queued, the warm worker is automatically torn down on the next idle tick.
+
+### Mermaid Diagram
+
+```mermaid
+flowchart TD
+  A[Caller invokes excalidrawToSvg] --> B[Main thread creates request id and queue item]
+  B --> C{Warm worker exists?}
+  C -- No --> D[Spawn worker thread]
+  C -- Yes --> E[Reuse existing worker]
+  D --> F[Post request to worker]
+  E --> F
+  F --> G[Worker runtime receives queued request]
+  G --> H[Load or reuse JSDOM globals and @excalidraw/utils]
+  H --> I[exportToSvg with skipInliningFonts true]
+  I --> J[Collect used font families and glyphs]
+  J --> K{Subset/font cache hit?}
+  K -- Yes --> L[Reuse cached embedded font data]
+  K -- No --> M[Read font file and subset glyphs]
+  M --> L
+  L --> N[Inject @font-face CSS into SVG]
+  N --> O[Return serialized SVG markup to main thread]
+  O --> P[Parse markup with reusable DOMParser]
+  P --> Q[Resolve Promise with SVGElement]
+```
+
+### Timeout and Cancellation Behavior
+
+- **Queued request timeout/abort** — If a request has not started yet, it is removed from the queue and never sent to the worker.
+- **Active request timeout/abort** — If a request is already rendering, the promise rejects and the worker thread is terminated.
+- **No overlap after timeout** — The next queued export does not start until the old worker's `terminate()` promise resolves, so a timed-out render is not left running in the background.
+- **Process isolation** — Because cancellation happens by terminating the worker thread, CPU and memory used by the in-flight render are released with that worker rather than left attached to the main process.
 
 ## Development
 
@@ -131,12 +181,12 @@ The manual command automatically runs tests, authenticates with npm, publishes t
 
 ```
 src/
-├── excalidraw-to-svg.js       # Public API, worker orchestration, SVG parsing
-├── excalidraw-runtime.js      # Isolated JSDOM + Excalidraw export runtime
-├── excalidraw-to-svg.worker.js # Worker thread entry point
+├── excalidraw-to-svg.js       # Public API, warm worker queue, timeout/abort handling, SVG parsing
+├── excalidraw-runtime.js      # Worker runtime: JSDOM, Excalidraw export, font embedding, caching
+├── excalidraw-to-svg.worker.js # Worker thread entry point and in-worker render queue
 ├── build-svg-path.js          # Output path resolution for CLI
 ├── build-svg-path.test.js     # Tests for path resolution
-├── excalidraw-to-svg.test.js  # Tests for SVG conversion + global safety
+├── excalidraw-to-svg.test.js  # Tests for SVG conversion, worker reuse, timeout safety
 ├── cli.js                     # CLI entry point
 └── index.js                   # Package entry point (re-exports core)
 diagrams/                      # Example .excalidraw files

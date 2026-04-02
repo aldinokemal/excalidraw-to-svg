@@ -10,6 +10,7 @@ const workerState = {
   idleTimerId: null,
   nextRequestId: 1,
   queue: [],
+  terminatingPromise: null,
   worker: null,
 };
 
@@ -82,10 +83,24 @@ const terminateWorker = () => {
     workerState.idleTimerId = null;
   }
 
+  if (workerState.terminatingPromise) {
+    return workerState.terminatingPromise;
+  }
+
   const worker = detachWorker();
   if (worker) {
-    void worker.terminate();
+    workerState.terminatingPromise = worker
+      .terminate()
+      .catch(() => undefined)
+      .finally(() => {
+        if (workerState.terminatingPromise) {
+          workerState.terminatingPromise = null;
+        }
+      });
+    return workerState.terminatingPromise;
   }
+
+  return Promise.resolve();
 };
 
 const ensureWorker = () => {
@@ -110,7 +125,7 @@ const pumpQueue = () => {
     workerState.idleTimerId = null;
   }
 
-  if (workerState.currentTask) {
+  if (workerState.currentTask || workerState.terminatingPromise) {
     return;
   }
 
@@ -182,9 +197,10 @@ function handleWorkerMessage(message) {
 }
 
 function handleWorkerError(error) {
-  terminateWorker();
   failActiveTask(error);
-  pumpQueue();
+  void terminateWorker().finally(() => {
+    pumpQueue();
+  });
 }
 
 function handleWorkerExit(code) {
@@ -211,8 +227,9 @@ const cancelTask = (task, error) => {
     settleTask(task, () => {
       task.reject(error);
     });
-    terminateWorker();
-    pumpQueue();
+    void terminateWorker().finally(() => {
+      pumpQueue();
+    });
     return;
   }
 

@@ -261,6 +261,65 @@ describe("excalidraw-to-svg cancellation", () => {
     expect(workerModule.workers[0].terminate).toHaveBeenCalledTimes(1);
   });
 
+  it("should wait for worker termination before starting the next export after timeout", async () => {
+    jest.useFakeTimers();
+    jest.resetModules();
+
+    let resolveTerminate;
+    const terminatePromise = new Promise((resolve) => {
+      resolveTerminate = resolve;
+    });
+    const workers = [];
+    const Worker = jest.fn(() => {
+      const workerIndex = workers.length;
+      const worker = new EventEmitter();
+      worker.postMessage = jest.fn((payload) => {
+        if (workerIndex === 1) {
+          setTimeout(() => {
+            worker.emit("message", {
+              id: payload.id,
+              ok: true,
+              svgMarkup: '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+            });
+          }, 5);
+        }
+      });
+      worker.terminate = jest.fn(() => terminatePromise);
+      worker.unref = jest.fn();
+      workers.push(worker);
+      return worker;
+    });
+
+    jest.doMock("worker_threads", () => ({ Worker }));
+
+    const excalidrawToSvgWithTimeout = require("./excalidraw-to-svg");
+
+    const firstPromise = excalidrawToSvgWithTimeout(mockDiagram, {
+      timeoutMs: 25,
+    });
+    const secondPromise = excalidrawToSvgWithTimeout(mockDiagramWithFont);
+    const firstRejection = expect(firstPromise).rejects.toMatchObject({
+      name: "TimeoutError",
+      message: "SVG worker timed out after 25ms",
+    });
+
+    await jest.advanceTimersByTimeAsync(25);
+
+    await firstRejection;
+    expect(Worker).toHaveBeenCalledTimes(1);
+    expect(workers[0].terminate).toHaveBeenCalledTimes(1);
+
+    resolveTerminate();
+    await terminatePromise;
+    await jest.advanceTimersByTimeAsync(0);
+
+    expect(Worker).toHaveBeenCalledTimes(2);
+
+    await jest.advanceTimersByTimeAsync(5);
+    const secondSvg = await secondPromise;
+    expect(secondSvg.outerHTML).toMatch(/<svg/);
+  });
+
   it("should reject with AbortError and recycle the warm worker when aborted", async () => {
     jest.resetModules();
 
