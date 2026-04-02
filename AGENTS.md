@@ -21,8 +21,11 @@ Node.js library + CLI to convert Excalidraw `.excalidraw` diagrams into standalo
 ├── assets/                    # Extra font files (Xiaolai.ttf, 22MB)
 ├── diagrams/                  # Example .excalidraw inputs
 ├── output/                    # Example .svg outputs (gittracked)
-├── test-import.js             # Manual integration test (standalone JSDOM bootstrap)
-└── test-sample.js             # Manual smoke test (converts diagrams/sample.excalidraw)
+└── test/                      # Manual integration / smoke scripts (run with node)
+    ├── sample.js              # Smoke: convert diagrams/sample.excalidraw → output/sample.svg
+    ├── import.js              # Standalone JSDOM bootstrap + exportToSvg (debug harness)
+    ├── globals-clean.js       # Verify host globals stay clean
+    └── warm-worker-impact.js  # Benchmark cold vs warm worker conversion times
 ```
 
 ## WHERE TO LOOK
@@ -64,8 +67,7 @@ Node.js library + CLI to convert Excalidraw `.excalidraw` diagrams into standalo
 
 ```bash
 npm test                        # Run Jest tests (requires --experimental-vm-modules)
-node test-sample.js             # Manual smoke test → output/sample.svg
-node test-import.js             # Manual integration test (standalone bootstrap)
+npm run test:integration         # test/ scripts (each in its own node process: globals-clean → sample → import → warm)
 npx excalidraw-to-svg <input> [output]  # CLI usage
 ```
 
@@ -74,5 +76,5 @@ npx excalidraw-to-svg <input> [output]  # CLI usage
 - `@excalidraw/utils` is pinned to a **test pre-release** (`0.1.3-test32`) — upgrades may break API
 - `assets/Xiaolai.ttf` (22MB) is a CJK font stored in-repo for custom font support — not from `@excalidraw/utils`
 - `output/` and `diagrams/` are gittracked but `.npmignore`d from the published package
-- `test-import.js` duplicates the JSDOM setup from core — exists as a standalone debug harness, not a test
+- `test/import.js` duplicates the JSDOM setup from core — standalone debug harness, not part of Jest
 - The `package.json` `main` field points to `src/excalidraw-to-svg.js` directly (not `src/index.js`)

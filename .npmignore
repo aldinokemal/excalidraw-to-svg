@@ -4,7 +4,7 @@ diagrams/
 
 # Test files
 *.test.js
-test-*.js
+test/
 jest.config.js
 
 # Dev config

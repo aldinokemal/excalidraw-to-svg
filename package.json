@@ -18,6 +18,7 @@
   "scripts": {
     "test": "NODE_OPTIONS='--experimental-vm-modules' jest src/*.test.js",
     "test:watch": "NODE_OPTIONS='--experimental-vm-modules' jest src/*.test.js --watch",
+    "test:integration": "node test/globals-clean.js && node test/sample.js && node test/import.js && node test/warm-worker-impact.js",
     "prepublishOnly": "npm test",
     "npm:publish": "NPM_TOKEN=${NPM_TOKEN:?'NPM_TOKEN is required'} && echo \"//registry.npmjs.org/:_authToken=${NPM_TOKEN}\" > .npmrc && npm publish --access public && rm -f .npmrc"
   },
