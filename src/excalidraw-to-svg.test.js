@@ -1,3 +1,4 @@
+const { EventEmitter } = require("events");
 const excalidrawToSvg = require("./excalidraw-to-svg");
 
 const mockDiagram = {
@@ -131,6 +132,24 @@ describe("excalidraw-to-svg function", () => {
 });
 
 describe("excalidraw-to-svg cancellation", () => {
+  const createWorkerMock = ({ onPostMessage } = {}) => {
+    const workers = [];
+    const Worker = jest.fn(() => {
+      const worker = new EventEmitter();
+      worker.postMessage = jest.fn((payload) => {
+        if (onPostMessage) {
+          onPostMessage(worker, payload);
+        }
+      });
+      worker.terminate = jest.fn().mockResolvedValue(undefined);
+      worker.unref = jest.fn();
+      workers.push(worker);
+      return worker;
+    });
+
+    return { workers, Worker };
+  };
+
   afterEach(() => {
     jest.clearAllMocks();
     jest.resetModules();
@@ -138,23 +157,96 @@ describe("excalidraw-to-svg cancellation", () => {
     jest.unmock("worker_threads");
   });
 
-  it("should reject with TimeoutError and terminate the worker on timeout", async () => {
+  it("should reuse a warm worker across sequential conversions", async () => {
+    jest.resetModules();
+
+    const workerModule = createWorkerMock({
+      onPostMessage(worker, payload) {
+        setImmediate(() => {
+          worker.emit("message", {
+            id: payload.id,
+            ok: true,
+            svgMarkup: '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+          });
+        });
+      },
+    });
+    jest.doMock("worker_threads", () => workerModule);
+
+    const excalidrawToSvgWithMockedWorker = require("./excalidraw-to-svg");
+    const firstSvg = await excalidrawToSvgWithMockedWorker(mockDiagram);
+    const secondSvg = await excalidrawToSvgWithMockedWorker(mockDiagramWithFont);
+
+    expect(firstSvg.outerHTML).toMatch(/<svg/);
+    expect(secondSvg.outerHTML).toMatch(/<svg/);
+    expect(workerModule.Worker).toHaveBeenCalledTimes(1);
+    expect(workerModule.workers[0].postMessage).toHaveBeenCalledTimes(2);
+    expect(workerModule.workers[0].terminate).not.toHaveBeenCalled();
+  });
+
+  it("should simulate a slow first export and a faster second export", async () => {
     jest.useFakeTimers();
     jest.resetModules();
 
-    const workers = [];
-    jest.doMock("worker_threads", () => ({
-      Worker: jest.fn(() => {
-        const worker = {
-          once: jest.fn(),
-          removeAllListeners: jest.fn(),
-          terminate: jest.fn().mockResolvedValue(undefined),
-          postMessage: jest.fn(),
-        };
-        workers.push(worker);
-        return worker;
-      }),
-    }));
+    let exportCount = 0;
+    let firstSettled = false;
+    let secondSettled = false;
+
+    const workerModule = createWorkerMock({
+      onPostMessage(worker, payload) {
+        exportCount += 1;
+        const delayMs = exportCount === 1 ? 100 : 5;
+        setTimeout(() => {
+          worker.emit("message", {
+            id: payload.id,
+            ok: true,
+            svgMarkup: '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+          });
+        }, delayMs);
+      },
+    });
+    jest.doMock("worker_threads", () => workerModule);
+
+    const excalidrawToSvgWithMockedWorker = require("./excalidraw-to-svg");
+
+    const firstPromise = excalidrawToSvgWithMockedWorker(mockDiagram).then(
+      (svg) => {
+        firstSettled = true;
+        return svg;
+      }
+    );
+
+    await jest.advanceTimersByTimeAsync(99);
+    expect(firstSettled).toBe(false);
+
+    await jest.advanceTimersByTimeAsync(1);
+    const firstSvg = await firstPromise;
+    expect(firstSettled).toBe(true);
+    expect(firstSvg.outerHTML).toMatch(/<svg/);
+
+    const secondPromise = excalidrawToSvgWithMockedWorker(
+      mockDiagramWithFont
+    ).then((svg) => {
+      secondSettled = true;
+      return svg;
+    });
+
+    await jest.advanceTimersByTimeAsync(4);
+    expect(secondSettled).toBe(false);
+
+    await jest.advanceTimersByTimeAsync(1);
+    const secondSvg = await secondPromise;
+    expect(secondSettled).toBe(true);
+    expect(secondSvg.outerHTML).toMatch(/<svg/);
+    expect(workerModule.Worker).toHaveBeenCalledTimes(1);
+  });
+
+  it("should reject with TimeoutError and recycle the warm worker on timeout", async () => {
+    jest.useFakeTimers();
+    jest.resetModules();
+
+    const workerModule = createWorkerMock();
+    jest.doMock("worker_threads", () => workerModule);
 
     const excalidrawToSvgWithTimeout = require("./excalidraw-to-svg");
     const promise = excalidrawToSvgWithTimeout(mockDiagram, { timeoutMs: 25 });
@@ -166,29 +258,20 @@ describe("excalidraw-to-svg cancellation", () => {
     await jest.advanceTimersByTimeAsync(25);
 
     await rejection;
-    expect(workers[0].terminate).toHaveBeenCalledTimes(1);
+    expect(workerModule.workers[0].terminate).toHaveBeenCalledTimes(1);
   });
 
-  it("should reject with AbortError and terminate the worker when aborted", async () => {
+  it("should reject with AbortError and recycle the warm worker when aborted", async () => {
     jest.resetModules();
 
-    const workers = [];
-    jest.doMock("worker_threads", () => ({
-      Worker: jest.fn(() => {
-        const worker = {
-          once: jest.fn(),
-          removeAllListeners: jest.fn(),
-          terminate: jest.fn().mockResolvedValue(undefined),
-          postMessage: jest.fn(),
-        };
-        workers.push(worker);
-        return worker;
-      }),
-    }));
+    const workerModule = createWorkerMock();
+    jest.doMock("worker_threads", () => workerModule);
 
     const excalidrawToSvgWithAbort = require("./excalidraw-to-svg");
     const controller = new AbortController();
-    const promise = excalidrawToSvgWithAbort(mockDiagram, { signal: controller.signal });
+    const promise = excalidrawToSvgWithAbort(mockDiagram, {
+      signal: controller.signal,
+    });
     const rejection = expect(promise).rejects.toMatchObject({
       name: "AbortError",
       message: "SVG worker aborted",
@@ -196,7 +279,7 @@ describe("excalidraw-to-svg cancellation", () => {
     controller.abort();
 
     await rejection;
-    expect(workers[0].terminate).toHaveBeenCalledTimes(1);
+    expect(workerModule.workers[0].terminate).toHaveBeenCalledTimes(1);
   });
 
   it("should reject immediately with AbortError when signal is already aborted", async () => {

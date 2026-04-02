@@ -7,11 +7,15 @@ const serializeError = (error) => ({
   stack: error && error.stack ? error.stack : undefined,
 });
 
-parentPort.on("message", async ({ diagram }) => {
-  try {
-    const svgMarkup = await renderSvgMarkup(diagram);
-    parentPort.postMessage({ ok: true, svgMarkup });
-  } catch (error) {
-    parentPort.postMessage({ ok: false, error: serializeError(error) });
-  }
+let renderQueue = Promise.resolve();
+
+parentPort.on("message", ({ diagram, id }) => {
+  renderQueue = renderQueue.then(async () => {
+    try {
+      const svgMarkup = await renderSvgMarkup(diagram);
+      parentPort.postMessage({ id, ok: true, svgMarkup });
+    } catch (error) {
+      parentPort.postMessage({ id, ok: false, error: serializeError(error) });
+    }
+  });
 });

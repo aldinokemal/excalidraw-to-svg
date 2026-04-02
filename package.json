@@ -1,6 +1,6 @@
 {
   "name": "@aldinokemal2104/excalidraw-to-svg",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Node Library to transform excalidraw diagrams into svgs",
   "repository": {
     "type": "git",

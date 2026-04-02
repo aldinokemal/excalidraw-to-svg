@@ -17,13 +17,20 @@ const FONT_FILE_MAP = {
   Nunito: "Nunito ExtraLight Medium.ttf",
   Xiaolai: "Xiaolai.ttf",
 };
+const fontFileCache = new Map();
+const fontSubsetCache = new Map();
+const fullFontDataUriCache = new Map();
+let fontAssetsDir = null;
 
 /**
  * Resolves the path to the @excalidraw/utils font assets directory.
  */
 const getFontAssetsDir = () => {
-  const utilsDir = path.dirname(require.resolve("@excalidraw/utils"));
-  return path.join(utilsDir, "assets");
+  if (!fontAssetsDir) {
+    const utilsDir = path.dirname(require.resolve("@excalidraw/utils"));
+    fontAssetsDir = path.join(utilsDir, "assets");
+  }
+  return fontAssetsDir;
 };
 
 /**
@@ -32,12 +39,60 @@ const getFontAssetsDir = () => {
  * @returns {Buffer|null} Font file buffer or null if the file doesn't exist
  */
 const readFontFile = (fontFileName) => {
+  if (!fontFileName) return null;
+  if (fontFileCache.has(fontFileName)) {
+    return fontFileCache.get(fontFileName);
+  }
+
   try {
     const fontPath = path.join(getFontAssetsDir(), fontFileName);
-    return fs.readFileSync(fontPath);
+    const fontBuffer = fs.readFileSync(fontPath);
+    fontFileCache.set(fontFileName, fontBuffer);
+    return fontBuffer;
   } catch {
+    fontFileCache.set(fontFileName, null);
     return null;
   }
+};
+
+const buildCharacterString = (chars) =>
+  [...chars]
+    .sort((a, b) => a.codePointAt(0) - b.codePointAt(0))
+    .join("");
+
+const getFullFontDataUri = (fontName, fontBuffer) => {
+  if (fullFontDataUriCache.has(fontName)) {
+    return fullFontDataUriCache.get(fontName);
+  }
+
+  const dataUri = `data:font/ttf;base64,${fontBuffer.toString("base64")}`;
+  fullFontDataUriCache.set(fontName, dataUri);
+  return dataUri;
+};
+
+const getEmbeddedFontDataUri = async (fontName, fontBuffer, charString) => {
+  if (!charString) {
+    return null;
+  }
+
+  const cacheKey = `${fontName}\0${charString}`;
+  if (fontSubsetCache.has(cacheKey)) {
+    return fontSubsetCache.get(cacheKey);
+  }
+
+  const subsetPromise = (async () => {
+    try {
+      const subsetBuffer = await subsetFont(fontBuffer, charString, {
+        targetFormat: "sfnt",
+      });
+      return `data:font/ttf;base64,${Buffer.from(subsetBuffer).toString("base64")}`;
+    } catch {
+      return getFullFontDataUri(fontName, fontBuffer);
+    }
+  })();
+
+  fontSubsetCache.set(cacheKey, subsetPromise);
+  return subsetPromise;
 };
 
 /**
@@ -125,21 +180,16 @@ const generateFontFaceCSS = async (svg) => {
     const fontBuffer = readFontFile(fileName);
     if (!fontBuffer) continue;
 
-    try {
-      const charString = [...chars].join("");
-      const subsetBuffer = await subsetFont(fontBuffer, charString, {
-        targetFormat: "sfnt",
-      });
-      const dataUri = `data:font/ttf;base64,${Buffer.from(subsetBuffer).toString("base64")}`;
-      fontFaceRules.push(
-        `@font-face { font-family: "${fontName}"; src: url("${dataUri}") format("truetype"); }`,
-      );
-    } catch {
-      const dataUri = `data:font/ttf;base64,${fontBuffer.toString("base64")}`;
-      fontFaceRules.push(
-        `@font-face { font-family: "${fontName}"; src: url("${dataUri}") format("truetype"); }`,
-      );
-    }
+    const dataUri = await getEmbeddedFontDataUri(
+      fontName,
+      fontBuffer,
+      buildCharacterString(chars),
+    );
+    if (!dataUri) continue;
+
+    fontFaceRules.push(
+      `@font-face { font-family: "${fontName}"; src: url("${dataUri}") format("truetype"); }`,
+    );
   }
 
   return fontFaceRules.join("\n");
