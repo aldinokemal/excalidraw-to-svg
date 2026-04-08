@@ -7,7 +7,6 @@ const svgParserWindow = new JSDOM("<!DOCTYPE html>").window;
 const svgParser = new svgParserWindow.DOMParser();
 const workerState = {
   currentTask: null,
-  idleTimerId: null,
   nextRequestId: 1,
   queue: [],
   terminatingPromise: null,
@@ -78,11 +77,6 @@ const detachWorker = () => {
 };
 
 const terminateWorker = () => {
-  if (workerState.idleTimerId) {
-    clearTimeout(workerState.idleTimerId);
-    workerState.idleTimerId = null;
-  }
-
   if (workerState.terminatingPromise) {
     return workerState.terminatingPromise;
   }
@@ -120,11 +114,6 @@ const ensureWorker = () => {
 };
 
 const pumpQueue = () => {
-  if (workerState.idleTimerId) {
-    clearTimeout(workerState.idleTimerId);
-    workerState.idleTimerId = null;
-  }
-
   if (workerState.currentTask || workerState.terminatingPromise) {
     return;
   }
@@ -155,15 +144,6 @@ const pumpQueue = () => {
     }
 
     return;
-  }
-
-  if (workerState.worker && !workerState.idleTimerId) {
-    workerState.idleTimerId = setTimeout(() => {
-      workerState.idleTimerId = null;
-      if (!workerState.currentTask && workerState.queue.length === 0) {
-        terminateWorker();
-      }
-    }, 0);
   }
 };
 
