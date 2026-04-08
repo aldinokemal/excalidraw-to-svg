@@ -10,7 +10,7 @@ Useful if you are storing Excalidraw diagrams in repos and want a pipeline to ex
 - **CLI & API** — Use from the command line or as a library in your Node.js project.
 - **Embedded fonts** — Excalidraw's custom fonts (Excalifont, Virgil, Cascadia, Comic Shanns, Liberation Sans, Lilita One, Nunito) are automatically detected and embedded as base64 `@font-face` rules, so SVGs render correctly without external font dependencies.
 - **Isolated runtime** — Uses JSDOM inside a worker thread so `@excalidraw/utils` can run in Node.js without mutating your app's global `window`, `document`, `fetch`, or other browser APIs.
-- **Warm worker architecture** — Reuses a single worker across back-to-back exports so Excalidraw, JSDOM, and font tooling stay hot instead of paying cold-start cost on every call.
+- **Warm worker architecture** — Spawns a single worker on the first export and keeps it alive for the process lifetime, so Excalidraw, JSDOM, and font tooling stay hot instead of paying cold-start cost on every call.
 - **Font caching** — Caches font file reads and subset results inside the worker to speed up repeated exports with the same fonts and glyph sets.
 - **Timeout and abort support** — Supports `timeoutMs` and `AbortSignal`, and terminates the worker thread if an active export times out or is aborted.
 - **String or Object input** — Pass in a raw JSON string or a parsed JavaScript object.
@@ -111,12 +111,11 @@ const svgElement = await excalidrawToSvg(diagram, {
 ### Architecture Summary
 
 1. **Public API call** — `excalidrawToSvg(diagram, options)` enqueues a request in the main thread.
-2. **Warm worker reuse** — A single worker is reused for sequential exports, so the Excalidraw runtime, JSDOM polyfills, and `subset-font` initialization stay hot between calls.
+2. **Warm worker reuse** — A single worker is spawned on the first export and stays alive for the lifetime of the process, so the Excalidraw runtime, JSDOM polyfills, and `subset-font` initialization are only paid once.
 3. **Queued execution** — Only one export runs at a time inside the worker. Additional calls wait in a queue until the active export finishes.
 4. **Runtime export** — Inside the worker, `@excalidraw/utils` renders the SVG with `skipInliningFonts: true`.
 5. **Font embedding with caches** — The worker scans used fonts, reads font files from disk once, caches subset results by `font + glyph set`, and injects `@font-face` rules into the SVG.
 6. **Main-thread parse** — The worker returns serialized SVG markup, and the main thread parses it back into a DOM `SVGElement`.
-7. **Idle cleanup** — If there is no more work queued, the warm worker is automatically torn down on the next idle tick.
 
 ### Mermaid Diagram
 
